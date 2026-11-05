@@ -611,7 +611,7 @@ function invoiceHTML(d, invoiceNo, draft) {
     </table>
     <div class="inv-h">Payment Table</div>
     <table class="inv-t"><tbody>
-      ${d.pays.map((p, i) => `<tr><td class="d">Payment ${i + 1} (${dmy(p.date)})</td><td class="r">${fmt(p.p)} ${C}</td></tr>`).join('')}
+      ${d.pays.map((p, i) => `<tr><td class="d" style="width:40%">Payment ${i + 1}</td><td style="width:30%">${dmy(p.date)}</td><td class="r">${fmt(p.p)} ${C}</td></tr>`).join('')}
     </tbody></table>
     <div class="inv-pay">HOW TO MAKE PAYMENT?</div>
     <table class="inv-b"><tbody>
