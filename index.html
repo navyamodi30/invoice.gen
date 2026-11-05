@@ -246,8 +246,8 @@ main{max-width:1280px;margin:0 auto;padding:32px}
           </div>
           <div>
             <label class="lb" for="weeks">No. of weeks <span class="rq">*</span></label>
-            <input class="in" id="weeks" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" style="text-align:right">
-            <p class="hint" id="weeksHint">Filled from the dates. Change it if the contract says otherwise.</p><p class="ferr" id="e-weeks"></p>
+            <input class="in" id="weeks" readonly tabindex="-1" placeholder="From the dates" style="text-align:right">
+            <p class="hint">Calculated from the From and To dates.</p><p class="ferr" id="e-weeks"></p>
           </div>
           <div style="grid-column:1/-1">
             <span class="lb">Rent total</span>
@@ -369,7 +369,6 @@ const S = {
   country: 'UK',
   fees: FEE_TYPES.map(t => ({ type: t, amt: '' })),
   pays: [{ date: '', amt: '' }],
-  weeksTouched: false,
   exported: null, zoom: 0.85, showErrors: false
 };
 const $ = id => document.getElementById(id);
@@ -410,7 +409,8 @@ function read() {
   const v = id => $(id).value.trim();
   const c = COUNTRIES[S.country];
   const rateP = pence(v('rate'));
-  const weeksRaw = v('weeks'), weeks = weeksRaw === '' ? 0 : Number(weeksRaw);
+  const days0 = daysBetween(v('checkIn'), v('checkOut'));
+  const weeks = days0 > 0 ? Math.round(days0 / 7 * 100) / 100 : 0;
   const rentP = (rateP > 0 && weeks > 0) ? Math.round(rateP * weeks) : 0;
   const fees = S.fees.map(f => ({ type: f.type, raw: String(f.amt).trim(), p: pence(f.amt) }));
   const feesP = fees.reduce((s, f) => s + (f.p > 0 ? f.p : 0), 0);
@@ -427,7 +427,7 @@ function read() {
     agent: v('agent').toLowerCase(), name: v('name'), guarantor: v('guarantor'), invDate: v('invDate'),
     property: custom ? v('propertyOther') : v('property'), custom, room: v('room'), vatOnTotal, checkIn: v('checkIn'), checkOut: v('checkOut'), days,
     country: S.country, currency: c.currency, rate: c.rate, pct: c.pct,
-    rateP, weeks, weeksRaw, rentP, fees, feesP, vatP, netP: totalP - vatP, totalP, pays, lastP
+    rateP, weeks, rentP, fees, feesP, vatP, netP: totalP - vatP, totalP, pays, lastP
   };
 }
 
@@ -446,8 +446,7 @@ function validate(d) {
   if (!d.checkOut) e.checkOut = 'Pick the move-out date.';
   else if (d.checkIn && d.days <= 0) e.checkOut = 'Must be after the From date.';
   if (!(d.rateP > 0)) e.rate = 'Enter the weekly rent.';
-  if (!(d.weeks > 0)) e.weeks = 'Enter the number of weeks.';
-  else if (d.weeks > 104 || Math.abs(d.weeks * 100 - Math.round(d.weeks * 100)) > 1e-6) e.weeks = 'Use up to 104 weeks, with at most 2 decimals.';
+  if (d.weeks > 104) e.checkOut = 'Stay can’t be longer than 104 weeks.';
   if (d.fees.some(f => f.raw === '' || isNaN(f.p) || f.p < 0)) e.fees = 'Enter an amount for every fee. Write 0 if it doesn’t apply.';
   const n = d.pays.length;
   if (d.pays.some(p => !p.date)) e.pays = 'Every payment needs a due date.';
@@ -513,9 +512,7 @@ function update() {
   document.querySelectorAll('[data-cur]').forEach(el => el.textContent = C);
 
   $('daysHint').textContent = d.days > 0 ? `${d.days} days · ${fmtWeeks(d.days / 7)} weeks` : '';
-  const weeksOff = d.days > 0 && d.weeks > 0 && Math.abs(d.weeks * 7 - d.days) >= 7;
-  $('weeksHint').className = 'hint' + (weeksOff ? ' warn' : '');
-  $('weeksHint').textContent = weeksOff ? `The dates cover ${fmtWeeks(d.days / 7)} weeks. Check this matches the contract.` : 'Filled from the dates. Change it if the contract says otherwise.';
+  $('weeks').value = d.weeks > 0 ? fmtWeeks(d.weeks) : '';
   $('rentTotal').value = fmt(d.rentP);
   const vatNote = d.days > 0 ? (d.vatOnTotal ? ` Stay over ${VAT_TOTAL_AFTER_DAYS} days, so VAT applies to rent too.` : ' VAT-exempt (stay of 28 days or fewer).') : '';
   $('rentHint').textContent = (d.rentP > 0 ? `${fmt(d.rateP)} × ${fmtWeeks(d.weeks)} weeks.` : 'Rent per week × no. of weeks.') + vatNote;
@@ -538,7 +535,7 @@ function update() {
   else if (d.totalP > 0) { foot.className = 'tfoot bad'; foot.innerHTML = `<span>Over the total by <span class="num">${fmt(-d.lastP)} ${C}</span></span><span class="num">Total ${fmt(d.totalP)} ${C}</span>`; }
   else { foot.className = 'tfoot'; foot.innerHTML = `<span style="color:var(--mut);font-weight:500">Add rent and fees to build the schedule.</span>`; }
 
-  const reqKeys = ['agent', 'name', 'guarantor', 'invDate', 'property', 'propertyOther', 'room', 'checkIn', 'rate', 'weeks', 'fees'];
+  const reqKeys = ['agent', 'name', 'guarantor', 'invDate', 'property', 'propertyOther', 'room', 'checkIn', 'rate', 'fees'];
   const reqOk = !reqKeys.some(k => e[k]) && d.checkOut && !(e.pays && e.pays.startsWith('Every'));
   const datesOk = d.checkIn && d.checkOut && d.days > 0;
   const schedOk = d.totalP > 0 && d.lastP > 0;
@@ -549,7 +546,6 @@ function update() {
     [datesOk ? 'ok' : 'bad', datesOk ? 'Stay dates are valid' : 'Stay dates need fixing'],
     [schedOk ? 'ok' : 'bad', schedOk ? 'Schedule matches total' : 'Schedule doesn’t match total']
   ];
-  if (weeksOff) items.push(['warn', 'Weeks don’t match the stay dates. Check the contract.']);
   if (!ordered) items.push(['warn', 'Payment dates aren’t in order. Check they’re right.']);
   $('checks').innerHTML = items.map(([c, t]) => `<li class="${c}">${c === 'ok' ? tick : c === 'bad' ? cross : dot}<span>${t}</span></li>`).join('');
 
@@ -558,7 +554,7 @@ function update() {
 }
 
 function showErrors(e, d) {
-  ['agent', 'name', 'guarantor', 'invDate', 'property', 'propertyOther', 'room', 'checkIn', 'checkOut', 'weeks'].forEach(k => {
+  ['agent', 'name', 'guarantor', 'invDate', 'property', 'propertyOther', 'room', 'checkIn', 'checkOut'].forEach(k => {
     $(k).classList.toggle('bad', !!e[k]);
     const m = $('e-' + k); if (m) m.textContent = e[k] || '';
   });
@@ -608,9 +604,9 @@ function invoiceHTML(d, invoiceNo, draft) {
       <tbody>
         <tr><td class="d">Accommodation for ${esc(d.name)} ${esc(d.property)} - ${esc(d.room)}<span class="rate">${fmtWeeks(d.weeks)} weeks × ${fmt(d.rateP)} ${C} per week</span></td><td>${dmy(d.checkIn)}</td><td>${dmy(d.checkOut)}</td><td>${d.days} Days</td><td class="r">${fmt(d.rentP)} ${C}</td></tr>
         ${d.feesP > 0 ? `<tr><td class="d">${esc(lbl)} for ${esc(d.name)}</td><td>-</td><td>-</td><td>1</td><td class="r">${fmt(d.feesP)} ${C}</td></tr>` : ''}
-        <tr><td colspan="4" style="font-weight:700;padding-top:14px">Total (incl. VAT)</td><td class="r" style="font-weight:700;padding-top:14px">${fmt(d.totalP)} ${C}</td></tr>
+        <tr><td colspan="4" style="padding-top:14px"><i>VAT (${d.pct})</i></td><td class="r" style="padding-top:14px"><i>${fmt(d.vatP)} ${C}</i></td></tr>
         <tr><td colspan="4"><i>Net (excl. VAT)</i></td><td class="r"><i>${fmt(d.netP)} ${C}</i></td></tr>
-        <tr><td colspan="4"><i>VAT (${d.pct})</i></td><td class="r"><i>${fmt(d.vatP)} ${C}</i></td></tr>
+        <tr><td colspan="4" style="font-weight:700">Total (incl. VAT)</td><td class="r" style="font-weight:700">${fmt(d.totalP)} ${C}</td></tr>
       </tbody>
     </table>
     <div class="inv-h">Payment Table</div>
@@ -773,11 +769,11 @@ async function doExport() {
 }
 
 function resetForm() {
-  ['name', 'guarantor', 'checkIn', 'checkOut', 'rate', 'weeks'].forEach(k => $(k).value = '');
+  ['name', 'guarantor', 'checkIn', 'checkOut', 'rate'].forEach(k => $(k).value = '');
   $('property').value = ''; $('propertyOther').value = ''; fillRooms();
   $('invDate').value = todayISO(); $('invDate').min = todayISO();
   S.fees = FEE_TYPES.map(t => ({ type: t, amt: '' })); S.pays = [{ date: '', amt: '' }]; $('payCount').value = '1';
-  S.weeksTouched = false; S.showErrors = false; $('confirm').checked = false;
+  S.showErrors = false; $('confirm').checked = false;
   document.querySelectorAll('.bad').forEach(el => el.classList.remove('bad'));
   document.querySelectorAll('.ferr').forEach(el => el.textContent = '');
   renderFees(); renderPays(); setExported(null); update(); closePreview();
@@ -786,19 +782,12 @@ function resetForm() {
 
 /* ===== Events ===== */
 function dirty() { if (S.exported) setExported(null); $('confirm').checked = false; }
-function autoWeeks() {
-  if (S.weeksTouched) return;
-  const days = daysBetween($('checkIn').value, $('checkOut').value);
-  $('weeks').value = days > 0 ? fmtWeeks(days / 7) : '';
-}
 
 $('form').addEventListener('input', ev => {
   const t = ev.target, ds = t.dataset;
   if (ds.feeAmt !== undefined) S.fees[ds.feeAmt].amt = t.value;
   if (ds.payDate !== undefined) S.pays[ds.payDate].date = t.value;
   if (ds.payAmt !== undefined && +ds.payAmt < S.pays.length - 1) S.pays[ds.payAmt].amt = t.value;
-  if (t.id === 'weeks') S.weeksTouched = t.value.trim() !== '';
-  if (t.id === 'checkIn' || t.id === 'checkOut') autoWeeks();
   dirty(); update();
 });
 $('agent').addEventListener('input', () => { store.set('ufx_agent_email', $('agent').value.trim()); dirty(); update(); });
