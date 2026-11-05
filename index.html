@@ -343,11 +343,11 @@ main{max-width:1280px;margin:0 auto;padding:32px}
 
 <script>
 /* ===== Config ===== */
-const SHEET_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyR4umqXlDXIvB2Q0wA0uHLiQn-1hY6WsV3VSgSXm55kG-ob5sk8KW_4-RJPKHPeNny/exec';            // Apps Script web app /exec URL. Empty = test mode (PDF only, nothing logged).
-const SHEET_TOKEN = 'CHANGE-ME';      // Must equal CFG.TOKEN in Code.gs
+const SHEET_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyR4umqXlDXIvB2Q0wA0uHLiQn-1hY6WsV3VSgSXm55kG-ob5sk8KW_4-RJPKHPeNny/exec';   // Apps Script web app /exec URL. Empty = test mode (PDF only, nothing logged).
+const SHEET_TOKEN = 'CHANGE-ME';      // Must equal INV_CFG.TOKEN in Invoice.gs. Change both to a random value before go-live.
 const VERSION = 'inv-v2';
 const MAX_PAYMENTS = 9;               // A4 one-page limit
-const ALLOWED_EMAIL_DOMAINS = [];     // e.g. ['uniacco.com', 'uniflx.com']. Empty = any domain. Keep in sync with Code.gs.
+const ALLOWED_EMAIL_DOMAINS = [];     // e.g. ['uniacco.com', 'uniflx.com']. Empty = any domain. Keep in sync with Invoice.gs.
 const COUNTRIES = {
   UK: { currency: 'GBP', rate: 0.20,  pct: '20%' },
   IE: { currency: 'EUR', rate: 0.135, pct: '13.5%' }
@@ -430,6 +430,7 @@ function validate(d) {
   if (!d.name) e.name = 'Enter the student’s full name.';
   if (!d.guarantor) e.guarantor = 'Enter the guarantor’s name.';
   if (!d.invDate) e.invDate = 'Pick the invoice date.';
+  else if (d.invDate < todayISO()) e.invDate = 'Invoice date can’t be earlier than today.';
   if (!d.property) e.property = 'Pick the property.';
   if (!d.room) e.room = 'Pick the room type.';
   if (!d.checkIn) e.checkIn = 'Pick the move-in date.';
@@ -697,15 +698,21 @@ async function makePdf(d, refId) {
   await Promise.all([...el.querySelectorAll('img')].map(i => i.decode ? i.decode().catch(() => {}) : null));
   if (document.fonts && document.fonts.ready) await document.fonts.ready;
   const safe = d.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_').slice(0, 40);
+  // html2canvas offsets the capture by the page's scroll position: reset it during capture
+  const sx = window.scrollX, sy = window.scrollY;
+  window.scrollTo(0, 0);
   try {
     await html2pdf().set({
       margin: 0, filename: `${refId}_${safe}.pdf`,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+      html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0, windowWidth: 794 },
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
       pagebreak: { mode: [] }
     }).from(el).save();
-  } finally { host.innerHTML = ''; }
+  } finally {
+    host.innerHTML = '';
+    window.scrollTo(sx, sy);
+  }
 }
 
 async function doExport() {
@@ -754,7 +761,7 @@ async function doExport() {
 function resetForm() {
   ['name', 'guarantor', 'checkIn', 'checkOut', 'rate', 'weeks'].forEach(k => $(k).value = '');
   $('property').value = ''; fillRooms();
-  $('invDate').value = todayISO();
+  $('invDate').value = todayISO(); $('invDate').min = todayISO();
   S.fees = FEE_TYPES.map(t => ({ type: t, amt: '' })); S.pays = [{ date: '', amt: '' }]; $('payCount').value = '1';
   S.weeksTouched = false; S.showErrors = false; $('confirm').checked = false;
   document.querySelectorAll('.bad').forEach(el => el.classList.remove('bad'));
@@ -826,6 +833,7 @@ document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && $('ov').
   $('topLogo').src = LOGO_WORDMARK;
   for (let i = 1; i <= MAX_PAYMENTS; i++) $('payCount').insertAdjacentHTML('beforeend', `<option value="${i}">${i}</option>`);
   $('invDate').value = todayISO();
+  $('invDate').min = todayISO();
   $('agent').value = store.get('ufx_agent_email');
   fillProperties(); fillRooms();
   renderFees(); renderPays(); setExported(null); update();
