@@ -234,8 +234,7 @@ main{max-width:1280px;margin:0 auto;padding:32px}
         <h2>Property and stay</h2>
         <p class="sub">Builds the accommodation line: “Accommodation for [name] [property] - [room type]”.</p>
         <div class="grid2">
-          <div><label class="lb" for="property">Property name <span class="rq">*</span></label><select class="in" id="property"></select><p class="ferr" id="e-property"></p>
-            <div id="otherWrap" hidden style="margin-top:10px"><label class="lb" for="propertyOther">Type the property name <span class="rq">*</span></label><input class="in" id="propertyOther" autocomplete="off" placeholder="e.g. Canal Point Residence"><p class="ferr" id="e-propertyOther"></p></div></div>
+          <div><label class="lb" for="property">Property name <span class="rq">*</span></label><input class="in" id="property" list="propList" autocomplete="off" placeholder="Search or type a property"><datalist id="propList"></datalist><p class="hint">Pick from the list, or type a property that isn’t listed.</p><p class="ferr" id="e-property"></p></div>
           <div><label class="lb" for="room">Room type <span class="rq">*</span></label><select class="in" id="room" disabled><option value="">Pick a property first</option></select><p class="ferr" id="e-room"></p></div>
           <div><label class="lb" for="checkIn">From <span class="rq">*</span></label><input class="in" id="checkIn" type="date"><p class="ferr" id="e-checkIn"></p></div>
           <div><label class="lb" for="checkOut">To <span class="rq">*</span></label><input class="in" id="checkOut" type="date"><p class="ferr" id="e-checkOut"></p><p class="hint" id="daysHint"></p></div>
@@ -259,7 +258,7 @@ main{max-width:1280px;margin:0 auto;padding:32px}
 
       <section class="card">
         <h2>Fees</h2>
-        <p class="sub" id="feeSub">Enter VAT-inclusive amounts. Write 0 for any fee that doesn’t apply.</p>
+        <p class="sub" id="feeSub">Enter VAT-inclusive amounts. Leave blank any fee that doesn’t apply.</p>
         <div id="fees"></div>
         <p class="ferr" id="e-fees"></p>
       </section>
@@ -355,8 +354,7 @@ const COUNTRIES = {
   IE: { currency: 'EUR', rate: 0.135, pct: '13.5%' }
 };
 const FEE_TYPES = ['Bedding', 'Cleaning', 'Service'];
-const VAT_TOTAL_AFTER_DAYS = 28;      // stay > 28 days: VAT on the whole total; 28 days or fewer: VAT on fees only. Keep in sync with Invoice.gs.
-const OTHER = '__other__';
+const VAT_FEES_ONLY_AFTER_DAYS = 28;  // stay of 28 days or fewer: VAT on the whole total; over 28 days: VAT on fees only. Keep in sync with Invoice.gs.
 // Room types offered when the property isn't in the list. Keep in sync with Invoice.gs.
 const GENERIC_ROOMS = ["Classic Ensuite", "Premium Ensuite", "Classic Studio", "Premium Studio", "Standard Studio", "Superior Studio", "Platinum Studio", "Bronze Ensuite", "Bronze Studio", "Silver Ensuite", "Silver Studio", "Bronze Studio Plus", "Non-suite", "Silver Deluxe Studio", "Silver Premium Ensuite", "2 Bed Shared Apartment", "Twin Bed Studio", "Gold Studio Plus with Balcony", "Large Silver Studio", "Gold Ensuite", "Gold Studio", "Premium Plus Studio", "Premium Ensuite Plus", "Premium Range 1 Ensuite", "Standard Plus", "Ensuite", "Platinum En-Suite", "Diamond Ensuite"];
 // Fallback list. When SHEET_ENDPOINT is set, the live list loads from the Properties tab instead.
@@ -416,16 +414,16 @@ function read() {
   const feesP = fees.reduce((s, f) => s + (f.p > 0 ? f.p : 0), 0);
   const totalP = rentP + feesP;
   const days = daysBetween(v('checkIn'), v('checkOut'));
-  const vatOnTotal = days > VAT_TOTAL_AFTER_DAYS;
+  const vatOnTotal = days > 0 && days <= VAT_FEES_ONLY_AFTER_DAYS;
   const vatP = Math.round((vatOnTotal ? totalP : feesP) * c.rate / (1 + c.rate));
-  const custom = $('property').value === OTHER;
+  const listed = matchProperty(v('property')), custom = !listed;
   const n = S.pays.length;
   const firstP = S.pays.slice(0, n - 1).reduce((s, p) => s + (pence(p.amt) || 0), 0);
   const lastP = totalP - firstP;
   const pays = S.pays.map((p, i) => ({ date: p.date, p: i === n - 1 ? lastP : pence(p.amt) }));
   return {
     agent: v('agent').toLowerCase(), name: v('name'), guarantor: v('guarantor'), invDate: v('invDate'),
-    property: custom ? v('propertyOther') : v('property'), custom, room: v('room'), vatOnTotal, checkIn: v('checkIn'), checkOut: v('checkOut'), days,
+    property: listed || v('property'), custom, room: v('room'), vatOnTotal, checkIn: v('checkIn'), checkOut: v('checkOut'), days,
     country: S.country, currency: c.currency, rate: c.rate, pct: c.pct,
     rateP, weeks, rentP, fees, feesP, vatP, netP: totalP - vatP, totalP, pays, lastP
   };
@@ -439,15 +437,14 @@ function validate(d) {
   if (!d.guarantor) e.guarantor = 'Enter the guarantor’s name.';
   if (!d.invDate) e.invDate = 'Pick the invoice date.';
   else if (d.invDate < todayISO()) e.invDate = 'Invoice date can’t be earlier than today.';
-  if (!$('property').value) e.property = 'Pick the property, or choose “Not listed” to type it.';
-  else if (d.custom && !d.property) e.propertyOther = 'Type the property name.';
+  if (!d.property) e.property = 'Pick or type the property.';
   if (!d.room) e.room = 'Pick the room type.';
   if (!d.checkIn) e.checkIn = 'Pick the move-in date.';
   if (!d.checkOut) e.checkOut = 'Pick the move-out date.';
   else if (d.checkIn && d.days <= 0) e.checkOut = 'Must be after the From date.';
   if (!(d.rateP > 0)) e.rate = 'Enter the weekly rent.';
   if (d.weeks > 104) e.checkOut = 'Stay can’t be longer than 104 weeks.';
-  if (d.fees.some(f => f.raw === '' || isNaN(f.p) || f.p < 0)) e.fees = 'Enter an amount for every fee. Write 0 if it doesn’t apply.';
+  if (d.fees.some(f => isNaN(f.p) || f.p < 0)) e.fees = 'Fee amounts must be 0 or more. Leave blank if it doesn’t apply.';
   const n = d.pays.length;
   if (d.pays.some(p => !p.date)) e.pays = 'Every payment needs a due date.';
   else if (d.pays.slice(0, n - 1).some(p => !(p.p > 0))) e.pays = 'Every payment needs an amount above zero.';
@@ -456,15 +453,19 @@ function validate(d) {
 }
 
 /* ===== Property dropdowns ===== */
+function matchProperty(name) {
+  const n = String(name || '').trim().toLowerCase();
+  if (!n) return '';
+  return Object.keys(PROPERTIES).find(p => p.toLowerCase() === n) || '';
+}
 function fillProperties(keep) {
-  const sel = $('property'), names = Object.keys(PROPERTIES).sort((a, b) => a.localeCompare(b));
-  sel.innerHTML = '<option value="">Select a property</option>' + names.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('') + `<option value="${OTHER}">Not listed — type it</option>`;
-  if (keep && (PROPERTIES[keep] || keep === OTHER)) sel.value = keep;
-  $('otherWrap').hidden = sel.value !== OTHER;
+  const names = Object.keys(PROPERTIES).sort((a, b) => a.localeCompare(b));
+  $('propList').innerHTML = names.map(p => `<option value="${esc(p)}"></option>`).join('');
 }
 function fillRooms(keep) {
-  const pv = $('property').value, sel = $('room'), list = pv === OTHER ? GENERIC_ROOMS : (PROPERTIES[pv] || []);
-  $('otherWrap').hidden = pv !== OTHER;
+  const typed = $('property').value.trim(), listed = matchProperty(typed), sel = $('room');
+  const list = !typed ? [] : listed ? PROPERTIES[listed] : GENERIC_ROOMS;
+  S.roomSource = !typed ? '' : listed || '*generic*';
   if (!list.length) { sel.innerHTML = '<option value="">Pick a property first</option>'; sel.disabled = true; return; }
   sel.disabled = false;
   sel.innerHTML = (list.length > 1 ? '<option value="">Select a room type</option>' : '') + list.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
@@ -486,7 +487,7 @@ async function loadLiveProperties() {
 function renderFees() {
   $('fees').innerHTML = S.fees.map((f, i) => `
     <div class="fee">
-      <label for="fee${i}">${f.type} fee <span class="rq">*</span></label>
+      <label for="fee${i}">${f.type} fee <span style="color:var(--mut);font-weight:500">(optional)</span></label>
       <div class="money" data-fee-box="${i}"><input id="fee${i}" data-fee-amt="${i}" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0.00" value="${esc(f.amt)}"><span class="cur" data-cur>${COUNTRIES[S.country].currency}</span></div>
     </div>`).join('');
 }
@@ -514,7 +515,7 @@ function update() {
   $('daysHint').textContent = d.days > 0 ? `${d.days} days · ${fmtWeeks(d.days / 7)} weeks` : '';
   $('weeks').value = d.weeks > 0 ? fmtWeeks(d.weeks) : '';
   $('rentTotal').value = fmt(d.rentP);
-  const vatNote = d.days > 0 ? (d.vatOnTotal ? ` Stay over ${VAT_TOTAL_AFTER_DAYS} days, so VAT applies to rent too.` : ' VAT-exempt (stay of 28 days or fewer).') : '';
+  const vatNote = d.days > 0 ? (d.vatOnTotal ? ` Stay of ${VAT_FEES_ONLY_AFTER_DAYS} days or fewer, so VAT applies to rent too.` : ` VAT-exempt (stay over ${VAT_FEES_ONLY_AFTER_DAYS} days).`) : '';
   $('rentHint').textContent = (d.rentP > 0 ? `${fmt(d.rateP)} × ${fmtWeeks(d.weeks)} weeks.` : 'Rent per week × no. of weeks.') + vatNote;
 
   const lastIn = document.querySelector(`[data-pay-amt="${n - 1}"]`);
@@ -528,14 +529,14 @@ function update() {
   $('sVat').textContent = `${fmt(d.vatP)} ${C}`;
   $('sTot').textContent = `${fmt(d.totalP)} ${C}`;
   const lbl = feeLabel(d.fees.filter(f => f.p > 0).map(f => f.type));
-  $('feeSub').textContent = lbl ? `Enter VAT-inclusive amounts. Write 0 for any fee that doesn’t apply. On the invoice: “${lbl}”.` : 'Enter VAT-inclusive amounts. Write 0 for any fee that doesn’t apply.';
+  $('feeSub').textContent = lbl ? `Enter VAT-inclusive amounts. Leave blank any fee that doesn’t apply. On the invoice: “${lbl}”.` : 'Enter VAT-inclusive amounts. Leave blank any fee that doesn’t apply.';
 
   const foot = $('schedFoot');
   if (d.totalP > 0 && d.lastP > 0) { foot.className = 'tfoot ok'; foot.innerHTML = `<span style="display:flex;gap:8px;align-items:center">${tick}Schedule matches total</span><span class="num">${fmt(d.totalP)} ${C} across ${n} payment${n > 1 ? 's' : ''}</span>`; }
   else if (d.totalP > 0) { foot.className = 'tfoot bad'; foot.innerHTML = `<span>Over the total by <span class="num">${fmt(-d.lastP)} ${C}</span></span><span class="num">Total ${fmt(d.totalP)} ${C}</span>`; }
   else { foot.className = 'tfoot'; foot.innerHTML = `<span style="color:var(--mut);font-weight:500">Add rent and fees to build the schedule.</span>`; }
 
-  const reqKeys = ['agent', 'name', 'guarantor', 'invDate', 'property', 'propertyOther', 'room', 'checkIn', 'rate', 'fees'];
+  const reqKeys = ['agent', 'name', 'guarantor', 'invDate', 'property', 'room', 'checkIn', 'rate', 'fees'];
   const reqOk = !reqKeys.some(k => e[k]) && d.checkOut && !(e.pays && e.pays.startsWith('Every'));
   const datesOk = d.checkIn && d.checkOut && d.days > 0;
   const schedOk = d.totalP > 0 && d.lastP > 0;
@@ -554,13 +555,13 @@ function update() {
 }
 
 function showErrors(e, d) {
-  ['agent', 'name', 'guarantor', 'invDate', 'property', 'propertyOther', 'room', 'checkIn', 'checkOut'].forEach(k => {
+  ['agent', 'name', 'guarantor', 'invDate', 'property', 'room', 'checkIn', 'checkOut'].forEach(k => {
     $(k).classList.toggle('bad', !!e[k]);
     const m = $('e-' + k); if (m) m.textContent = e[k] || '';
   });
   $('rateBox').classList.toggle('bad', !!e.rate); $('e-rate').textContent = e.rate || '';
   $('e-fees').textContent = e.fees || '';
-  d.fees.forEach((f, i) => { const b = document.querySelector(`[data-fee-box="${i}"]`); if (b) b.classList.toggle('bad', f.raw === '' || isNaN(f.p) || f.p < 0); });
+  d.fees.forEach((f, i) => { const b = document.querySelector(`[data-fee-box="${i}"]`); if (b) b.classList.toggle('bad', isNaN(f.p) || f.p < 0); });
   $('e-pays').textContent = e.pays || '';
   const n = d.pays.length;
   d.pays.forEach((p, i) => {
@@ -627,8 +628,7 @@ function invoiceHTML(d, invoiceNo, draft) {
     </tbody></table>
     <p class="inv-note">* You will have to pay the bank transfer charges. Please check with your bank for the exact amount.</p>
     <div class="inv-foot">
-      <span>Company Reg. No: [TBD] · VAT Number: [TBD] · [Registered address]</span>
-      <span>+91 1234567890 · payments@uniflx.com</span>
+      <span>Company Reg. No: , VAT Number: , +44 808 501 5198, platforms@uniflx.com</span>
     </div>
   </div>`;
 }
@@ -645,7 +645,7 @@ function renderPaper() {
     <div><span class="k">Property</span><span class="v">${esc(d.property)}</span></div>
     <div><span class="k">Room</span><span class="v">${esc(d.room)}</span></div>
     <div><span class="k">Rent</span><span class="v">${fmt(d.rateP)} × ${fmtWeeks(d.weeks)} weeks</span></div>
-    <div><span class="k">VAT ${d.pct}</span><span class="v">${d.vatOnTotal ? 'On total (over 28 days)' : 'Fees only'}</span></div>
+    <div><span class="k">VAT ${d.pct}</span><span class="v">${d.vatOnTotal ? 'On total (28 days or fewer)' : 'Fees only (over 28 days)'}</span></div>
     <div><span class="k">Payments</span><span class="v">${d.pays.length} · first due ${dmy(d.pays[0].date)}</span></div>
     <hr style="border:none;height:1px;background:var(--line2);margin:0">
     <div style="align-items:baseline"><span class="k">Total (incl. VAT)</span><span class="big num">${fmt(d.totalP)} ${C}</span></div>`;
@@ -770,7 +770,7 @@ async function doExport() {
 
 function resetForm() {
   ['name', 'guarantor', 'checkIn', 'checkOut', 'rate'].forEach(k => $(k).value = '');
-  $('property').value = ''; $('propertyOther').value = ''; fillRooms();
+  $('property').value = ''; fillRooms();
   $('invDate').value = todayISO(); $('invDate').min = todayISO();
   S.fees = FEE_TYPES.map(t => ({ type: t, amt: '' })); S.pays = [{ date: '', amt: '' }]; $('payCount').value = '1';
   S.showErrors = false; $('confirm').checked = false;
@@ -788,12 +788,13 @@ $('form').addEventListener('input', ev => {
   if (ds.feeAmt !== undefined) S.fees[ds.feeAmt].amt = t.value;
   if (ds.payDate !== undefined) S.pays[ds.payDate].date = t.value;
   if (ds.payAmt !== undefined && +ds.payAmt < S.pays.length - 1) S.pays[ds.payAmt].amt = t.value;
+  if (t.id === 'property') { const typed = t.value.trim(), key = !typed ? '' : matchProperty(typed) || '*generic*'; if (key !== S.roomSource) fillRooms($('room').value); }
   dirty(); update();
 });
 $('agent').addEventListener('input', () => { store.set('ufx_agent_email', $('agent').value.trim()); dirty(); update(); });
 $('form').addEventListener('change', ev => {
   const t = ev.target;
-  if (t.id === 'property') { fillRooms(); if (t.value === OTHER) $('propertyOther').focus(); dirty(); update(); }
+  if (t.id === 'property') { const m = matchProperty(t.value); if (m && m !== t.value.trim()) { t.value = m; fillRooms($('room').value); update(); } }
   if (t.id === 'room') { dirty(); update(); }
   if (t.id === 'payCount') {
     const n = +t.value;
