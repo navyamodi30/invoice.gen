@@ -770,9 +770,25 @@ async function makePdf(d, refId) {
     const pdf = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true });
     pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, 210, 297);
     pdf.save(`${refId}_${safe}.pdf`);
+    return { b64: pdf.output('datauristring').split(',')[1], name: d.name };
   } finally {
     host.innerHTML = '';
     window.scrollTo(sx, sy);
+  }
+}
+
+// Sends the downloaded PDF to the sheet, so its Drive link sits on the invoice row. Runs in the background.
+async function savePdfToSheet(ex, pdf) {
+  if (!SHEET_ENDPOINT || ex.test || ex.pdfSaved || !pdf) return;
+  try {
+    const res = await fetch(SHEET_ENDPOINT, { method: 'POST', body: JSON.stringify({
+      action: 'attach_pdf', token: SHEET_TOKEN, invoice_no: ex.refId, fingerprint: ex.fingerprint, pdf: pdf.b64, filename: pdf.name }) });
+    const j = await res.json();
+    if (!j.ok) throw new Error(j.error || 'rejected');
+    ex.pdfSaved = true;
+    if (S.exported === ex) setNote('ok', `Logged as ${ex.refId}. PDF downloaded and saved to the sheet.`);
+  } catch (err) {
+    if (S.exported === ex) setNote('warn', `Logged as ${ex.refId} and downloaded, but the PDF couldn’t be saved to the sheet (${err.message}). Click Download again to retry.`);
   }
 }
 
@@ -784,7 +800,10 @@ async function doExport() {
 
   if (S.exported) {
     btn.setAttribute('aria-busy', 'true');
-    try { await makePdf(d, S.exported.refId); setNote('ok', `Downloaded ${S.exported.refId} again.`); }
+    try {
+      const pdf = await makePdf(d, S.exported.refId); setNote('ok', `Downloaded ${S.exported.refId} again.`);
+      savePdfToSheet(S.exported, pdf);                  // retries only if the first save failed
+    }
     catch (err) { setNote('bad', 'Couldn’t create the PDF. Try again.'); }
     finally { btn.removeAttribute('aria-busy'); }
     return;
@@ -797,10 +816,11 @@ async function doExport() {
     if (!SHEET_ENDPOINT) {
       ex = { refId: `UFX-${new Date().getFullYear()}-TEST0`, test: true };
     } else {
-      const res = await fetch(SHEET_ENDPOINT, { method: 'POST', body: JSON.stringify(payload(d)) });
+      const body = payload(d);
+      const res = await fetch(SHEET_ENDPOINT, { method: 'POST', body: JSON.stringify(body) });
       const j = await res.json();
       if (!j.ok) throw new Error(j.error || 'The sheet rejected the invoice');
-      ex = { refId: j.refId, reused: !!j.reused };
+      ex = { refId: j.refId, reused: !!j.reused, fingerprint: body.fingerprint };
     }
   } catch (err) {
     btn.removeAttribute('aria-busy'); $('btnDoExportT').textContent = 'Export PDF';
@@ -808,11 +828,12 @@ async function doExport() {
     return;
   }
   try {
-    await makePdf(d, ex.refId);
+    const pdf = await makePdf(d, ex.refId);
     setExported(ex); renderPaper();
     setNote(ex.test ? 'warn' : 'ok', ex.test
       ? 'Test mode: PDF downloaded, nothing logged. Set SHEET_ENDPOINT to go live.'
-      : ex.reused ? `Same invoice as earlier today, so it keeps ${ex.refId}. PDF downloaded.` : `Logged as ${ex.refId}. PDF downloaded.`);
+      : ex.reused ? `Same invoice as earlier today, so it keeps ${ex.refId}. PDF downloaded. Saving it to the sheet…` : `Logged as ${ex.refId}. PDF downloaded. Saving it to the sheet…`);
+    savePdfToSheet(ex, pdf);
   } catch (err) {
     setExported(ex); renderPaper();
     setNote('bad', `Logged as ${ex.refId}, but the PDF didn’t download. Use Download again.`);
